@@ -1,0 +1,307 @@
+---
+title: "Assignment02-Data Viz and Wrangling"
+format: html
+editor: visual
+author: Kessie SHEN
+embed-resources: true
+---
+
+```{r}
+library(leaflet)
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(dtplyr)
+```
+
+## Data Wrangling
+
+```{r}
+CHSindividual <- fread("/Users/ckkkkkkkj/Desktop/chs_individual.csv")
+CHSregional <- fread("/Users/ckkkkkkkj/Desktop/chs_regional.csv")
+
+# Merge data
+CHS_Merge <- merge(
+  x = CHSindividual,
+  y = CHSregional,
+  by.x = "townname", 
+  by.y = "townname",
+  all.x = TRUE,
+  all.y = TRUE
+  )
+# Count rows in individual and regional datasets
+n_individual <- nrow(CHSindividual)
+n_regional <- nrow(CHSregional)
+n_merged <- nrow(CHS_Merge)
+cat("Rows in Individual Dataset:", n_individual, "\n")
+cat("Rows in Regional Dataset:", n_regional, "\n")
+cat("Rows in Merged Dataset:", n_merged, "\n")
+```
+
+#Impute Missing Values
+
+```{r}
+CHS_Merge <- CHS_Merge %>%
+  group_by(male, hispanic) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+
+# Categorical: Impute with mode
+impute_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+CHS_Merge <- CHS_Merge %>%
+  mutate(across(where(is.character), ~ ifelse(is.na(.), impute_mode(.), .)))
+```
+
+#Create a new categorical variable named “obesity_level”
+
+```{r}
+CHS_Merge <- CHS_Merge %>%
+  mutate(obesity_level = case_when(
+    bmi < 14 ~ "Underweight",
+    bmi >= 14 & bmi < 22 ~ "Normal",
+    bmi >= 22 & bmi < 24 ~ "Overweight",
+    bmi >= 24 ~ "Obese"
+  ))
+# Generate a summary table for 'obesity_level'
+bmi_summary <- CHS_Merge %>%
+  group_by(obesity_level) %>%
+  summarise(
+    min_bmi = min(bmi, na.rm = TRUE),
+    max_bmi = max(bmi, na.rm = TRUE),
+    total_obs = n()
+  )
+
+print(bmi_summary)
+
+# Create 'smoke_gas_exposure' variable
+CHS_Merge <- CHS_Merge %>%
+  mutate(smoke_gas_exposure = case_when(
+    smoke == 1 & gasstove == 1 ~ "Both",
+    smoke == 1 & gasstove == 0 ~ "Only Smoke",
+    smoke == 0 & gasstove == 1 ~ "Only Gas",
+    smoke == 0 & gasstove == 0 ~ "Neither"
+  ))
+FEV_summary <- CHS_Merge %>%
+  group_by(townname, male, obesity_level, smoke_gas_exposure) %>%
+  summarise(
+    avg_FEV1 = mean(fev, na.rm = TRUE),
+    sd_FEV1 = sd(fev, na.rm = TRUE)
+  )
+print(FEV_summary)
+
+```
+
+## Looking at the Data (EDA)
+
+```{r}
+#Cheaking data
+# Size of the data
+dim(CHS_Merge)
+# Variable types
+str(CHS_Merge)
+names(CHS_Merge)
+#Look at the top and bottom of the data
+head(CHS_Merge)
+tail(CHS_Merge)
+# Frequency
+table(CHS_Merge$obesity_level)
+table(CHS_Merge$smoke_gas_exposure)
+
+# Univariate summary statistics
+summary(CHS_Merge$BMI)       
+summary(CHS_Merge$FEV1)      
+summary(CHS_Merge$PM2.5)
+#Bivariate Summary 
+#What is the association between BMI and FEV (forced expiratory volume)?
+cor(CHS_Merge$bmi, CHS_Merge$fev, use = "complete.obs")
+ggplot(CHS_Merge, aes(x = bmi, y = fev)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ townname) +
+  labs(x = "BMI", y = "FEV (ml)", title = "BMI vs FEV by Town")
+#What is the association between smoke and gas exposure and FEV?
+correlation_data <- CHS_Merge %>%
+  select(smoke, fev, gasstove)
+correlation_matrix <- cor(correlation_data, use = "complete.obs")
+print(correlation_matrix)
+# What is the association between PM2.5 exposure and FEV?
+summary(CHS_Merge$pm25_mass)
+summary(CHS_Merge$fev)
+cor_pm25_fev <- cor(CHS_Merge$pm25_mass, CHS_Merge$fev, use = "complete.obs")
+print(paste("Correlation between PM2.5 and FEV:", cor_pm25_fev))
+```
+
+## Visualization
+
+```{r}
+#Facet plot showing scatterplots with regression lines of BMI vs FEV by “townname”
+ggplot(CHS_Merge, aes(x = bmi, y = fev)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ townname) +
+  labs(title = "bmi vs fev by Town", x = "bmi", y = "fev")
+#Stacked histograms of FEV by BMI category and FEV by smoke/gas exposure. Use different color schemes than the ggplot default.
+CHS_Merge <- CHS_Merge %>%
+  mutate(obesity_level = case_when(
+    bmi < 14 ~ "Underweight",
+    bmi >= 14 & bmi <= 22 ~ "Normal",
+    bmi > 22 & bmi <= 24 ~ "Overweight",
+    bmi > 24 ~ "Obese",
+    TRUE ~ NA_character_
+  ))
+ggplot(CHS_Merge, aes(x = fev, fill = obesity_level)) +
+  geom_histogram(position = "stack", bins = 30, alpha = 0.7) +  # Change bins as needed
+  scale_fill_manual(values = c("Underweight" = "blue", 
+                                "Normal" = "lightgreen", 
+                                "Overweight" = "orange", 
+                                "Obese" = "red")) +  # Custom colors
+  labs(title = "Stacked Histogram of FEV by BMI Category",
+       x = "FEV (ml)",
+       y = "Count") +
+  theme_minimal()
+CHS_Merge <- CHS_Merge %>%
+  mutate(smoke_gas_exposure = case_when(
+    smoke == 1 & gasstove == 1 ~ "Both",
+    smoke == 1 & gasstove == 0 ~ "Smoke Only",
+    smoke == 0 & gasstove == 1 ~ "Gas Stove Only",
+    smoke == 0 & gasstove == 0 ~ "Neither",
+    TRUE ~ NA_character_
+  ))
+
+# Stacked histogram of FEV by smoke/gas exposure
+ggplot(CHS_Merge, aes(x = fev, fill = smoke_gas_exposure)) +
+  geom_histogram(position = "stack", bins = 30, alpha = 0.7) +  # Change bins as needed
+  scale_fill_manual(values = c("Both" = "purple", 
+                                "Smoke Only" = "pink", 
+                                "Gas Stove Only" = "yellow", 
+                                "Neither" = "green")) +  # Custom colors
+  labs(title = "Stacked Histogram of FEV by Smoke/Gas Exposure",
+       x = "FEV (ml)",
+       y = "Count") +
+  theme_minimal()
+
+#Barchart of BMI by smoke/gas exposure.
+# Check how many missing BMI values exist
+sum(is.na(CHS_Merge$bmi))
+
+# Check how many missing smoke/gas exposure values exist
+sum(is.na(CHS_Merge$smoke_gas_exposure))
+# Filter out rows with NA values for BMI or smoke/gas exposure
+CHS_Merge_clean <- CHS_Merge %>%
+  filter(!is.na(bmi), !is.na(smoke_gas_exposure))
+
+
+ggplot(CHS_Merge_clean, aes(x = smoke_gas_exposure, y = bmi, fill = smoke_gas_exposure)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Bar Chart of BMI by Smoke/Gas Exposure", x = "Smoke/Gas Exposure", y = "Average BMI") +
+  theme_minimal()
+# Impute missing BMI values with the mean BMI (for demonstration)
+CHS_Merge$bmi[is.na(CHS_Merge$bmi)] <- mean(CHS_Merge$bmi, na.rm = TRUE)
+
+# Or impute using grouped means based on other variables (e.g., sex, town)
+CHS_Merge <- CHS_Merge %>%
+  group_by(male, townname) %>%
+  mutate(bmi = ifelse(is.na(bmi), mean(bmi, na.rm = TRUE), bmi))
+
+
+
+```
+
+Higher average BMIs in certain exposure groups could lead to increased health risks, such as obesity-related diseases, respiratory issues.
+
+```{r}
+##Statistical summary graphs of FEV by BMI and FEV by smoke/gas exposure category.
+# Summary of FEV by BMI category
+fev_bmi_summary <- CHS_Merge %>%
+  group_by(obesity_level) %>%
+  summarise(mean_fev = mean(fev, na.rm = TRUE),
+            sd_fev = sd(fev, na.rm = TRUE))
+
+print(fev_bmi_summary)
+# Summary of FEV by smoke/gas exposure category
+fev_smoke_summary <- CHS_Merge %>%
+  group_by(smoke_gas_exposure) %>%
+  summarise(mean_fev = mean(fev, na.rm = TRUE),
+            sd_fev = sd(fev, na.rm = TRUE))
+
+print(fev_smoke_summary)
+ggplot(CHS_Merge, aes(x = obesity_level, y = fev, fill = obesity_level)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 1, outlier.size = 2) +  # Outliers in red
+  scale_fill_manual(values = c("Underweight" = "lightblue", 
+                                "Normal" = "lightgreen", 
+                                "Overweight" = "orange", 
+                                "Obese" = "red")) +  # Custom colors
+  labs(title = "Boxplot of FEV by BMI Category",
+       x = "BMI Category",
+       y = "FEV (ml)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+#Boxplot of FEV by Smoke/Gas Exposure
+
+```{r}
+CHS_Merge_clean <- CHS_Merge %>%
+  filter(!is.na(fev), !is.na(smoke_gas_exposure))
+ggplot(CHS_Merge_clean, aes(x = smoke_gas_exposure, y = fev, fill = smoke_gas_exposure)) +
+  geom_boxplot() +
+  labs(title = "Boxplot of FEV by Smoke/Gas Exposure", x = "Smoke/Gas Exposure", y = "FEV") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(CHS_Merge, aes(x = obesity_level, y = fev, fill = obesity_level)) +
+  geom_violin(trim = FALSE) +  # Full distribution without trimming tails
+  scale_fill_manual(values = c("Underweight" = "lightblue", 
+                                "Normal" = "lightgreen", 
+                                "Overweight" = "orange", 
+                                "Obese" = "red")) +  # Custom colors
+  labs(title = "Violin Plot of FEV by BMI Category",
+       x = "BMI Category",
+       y = "FEV (ml)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## A leaflet map showing the concentrations of PM2.5 mass in each of the CHS communities.
+
+```{r}
+leaflet(CHS_Merge) %>%
+  addTiles() %>%  # Add default map tiles
+  addCircleMarkers(
+    lng = ~lon,  # Longitude
+    lat = ~lat,  # Latitude
+    color = ~ifelse(pm25_mass > 15, "red", ifelse(pm25_mass > 10, "orange", "green")),  # Color based on PM2.5 concentration
+    radius = ~pm25_mass / 2,  # Scale the marker size by PM2.5 concentration
+    label = ~paste0(townname, ": ", pm25_mass, " µg/m³"),  # Labels showing PM2.5 values
+    fillOpacity = 0.7
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = colorNumeric(c("green", "orange", "red"), domain = CHS_Merge$pm25_mass),
+    values = ~pm25_mass,
+    title = "PM2.5 Concentration (µg/m³)",
+    opacity = 1
+  )
+```
+
+##Choose a visualization to examine whether PM2.5 mass is associated with FEV.
+
+```{r}
+#a scatter plot with a regression line
+CHS_Merge_clean <- CHS_Merge %>%
+  filter(!is.na(fev), !is.na(pm25_mass))
+ggplot(CHS_Merge_clean, aes(x = pm25_mass, y = fev)) +
+  geom_point(alpha = 0.6, color = "blue") +  # Scatter points
+  geom_smooth(method = "lm", color = "red", se = FALSE) +  # Regression line
+  labs(title = "Association Between PM2.5 Mass and FEV",
+       x = "PM2.5 Mass (µg/m³)",
+       y = "FEV (ml)") +
+  theme_minimal()
+```
+
+a negative slope, it indicates that as PM2.5 mass increases, FEV decreases, suggesting a potential negative impact of air pollution on lung function.
